@@ -137,6 +137,7 @@ print(importance)
 # plot importance
 plot(importance)
 
+engineered_df <- subset(engineered_df, category == 'OffRoad')
 trainIndex <- createDataPartition(engineered_df$price__consumer_gross_euro, p = .8, list = FALSE)
 
 engineered_df_TRAIN <- engineered_df[ trainIndex,]
@@ -145,22 +146,25 @@ engineered_df_TEST  <- engineered_df[-trainIndex,]
 print(dim(engineered_df_TEST))
 print(dim(engineered_df_TRAIN))
 
-model_final <- train(price__consumer_gross_euro~mileage+mod_at_age+car_age+condition+features_central_locking, 
-                     data=engineered_df_TRAIN, 
+model_final <- train(price__consumer_gross_euro~
+                       mileage   + mod_at_age  + car_age,         data=engineered_df_TRAIN, 
                      method="blassoAveraged", 
                      preProcess="scale")
 
 summary(model_final)
 
 # predict
-predicted <- predict(model_final, newdata = subset(engineered_df_TEST, select = -c(category)))
+predicted <- predict(model_final, newdata = subset(engineered_df_TEST, select = c(mileage, mod_at_age, car_age)))
 actuals <- engineered_df_TEST$price__consumer_gross_euro
 
 # calculate residuals
 residuals<- predicted - actuals
+# standardize residuals
+st_residuals <- (residuals - mean(residuals))/sqrt(var(residuals))
 
 # plot to check
-plot(predicted, residuals)
-abline(0,0)
+qplot(predicted, actuals) + geom_abline(aes(slope=1,intercept=0,color="red"), size =1.3)
+qplot(predicted, st_residuals) + geom_abline(aes(slope=0,intercept=0,color="red"), size =1.3)
+
 
 RMSE(as.numeric(predicted), as.numeric(actuals))
