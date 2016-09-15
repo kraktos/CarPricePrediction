@@ -19,7 +19,7 @@ setwd("/Users/arnabdutta/git/CarPricePrediction")
 # impute the missing values by regressin on other variables
 data_imputation <- function(df){
   # check which columns are missing and how many
-  print(md.pattern(df)) 
+  #print(md.pattern(df)) 
   
   # impute by predictive mean matching
   df_only_numeric <- subset(df, select = -c(category))
@@ -60,6 +60,9 @@ feature_engineer <- function(df){
   df$first_registration_year <- NULL
   df$first_registration_month <- NULL
   
+  # convert to factor representation
+  df$category <- factor(df$category)
+  
   return(df)
 }
 
@@ -72,10 +75,12 @@ cleanse_and_transform <- function(df){
   # impute model_id with column mode
   cond.map <- c("NEW"=1, "USED"=0)
   central.lock.map <- c("false"=0, "true"=1)
+  makeid.map <- c("1900"=0, "25100"=1)
   
   # convert the 2-level factors to numeric 
   df$condition <- cond.map[as.character(df$condition)]
   df$features_central_locking <- central.lock.map[as.character(df$features_central_locking)]
+  df$make_id <- makeid.map[as.character(df$make_id)]
   
   # convert all logical columns to numeric
   cols <- sapply(df, is.logical)
@@ -89,33 +94,84 @@ cleanse_and_transform <- function(df){
 
 
 feature_scaling <- function(df){
-  df$mileage  <- scale(df$mileage , center = FALSE, scale = max(df$mileage , na.rm = TRUE))
-  df$mod_at_age  <- scale(df$mod_at_age , center = FALSE, scale = max(df$mod_at_age , na.rm = TRUE))
-  df$car_age  <- scale(df$car_age , center = FALSE, scale = max(df$car_age , na.rm = TRUE))
+  df$mileage  <- scale(df$mileage , center = TRUE, scale = max(df$mileage , na.rm = TRUE))
+  df$mod_at_age  <- scale(df$mod_at_age , center = TRUE, scale = max(df$mod_at_age , na.rm = TRUE))
+  df$car_age  <- scale(df$car_age , center = TRUE, scale = max(df$car_age , na.rm = TRUE))
   
   return(df)
 }
 
+feature_selection <- function(df){
+  # for each columns, calculate variance,
+  print(dim(df))
+}
+
+############################################################
 # read the training data
+############################################################
 read_train <- read.csv("data/train.dsv", sep="|", quote = "\"")
+read_test <- read.csv("data/test.dsv", sep="|", quote = "\"")
 
+############################################################
 # cleanse and data transformation
-df <- cleanse_and_transform(read_train)
+# changing data types, creating new features
+############################################################
+df_train <- cleanse_and_transform(read_train)
+df_test <- cleanse_and_transform(read_test)
+read_train <- NULL
+read_test <- NULL
 
-df_only_numeric <- subset(df, select = -c(category))
+df_only_numeric <- subset(df_train, select = -c(category))
+# fancy visualizations
+aggr(df_only_numeric, col=c('blue','red'), numbers=TRUE, sortVars=TRUE, 
+                  labels=names(df_only_numeric), prop = TRUE, digits=2, 
+                  combined = TRUE, bars=TRUE, only.miss = TRUE, cex.axis=0.24, 
+                  gap=3, ylab=c("missing data","Pattern"))
+
+
+df_only_numeric_test <- subset(df_test, select = -c(category))
 
 # fancy visualizations
-aggr_plot <- aggr(df_only_numeric, col=c('blue','red'), numbers=TRUE, sortVars=TRUE, 
-                  labels=names(df_only_numeric), prop = TRUE, digits=2, combined = TRUE, bars=TRUE, only.miss = TRUE, cex.axis=0.24, gap=3, ylab=c("missing data","Pattern"))
+aggr(df_only_numeric_test, col=c('blue','red'), numbers=TRUE, sortVars=TRUE, 
+                  labels=names(df_only_numeric_test), prop = TRUE, digits=2, 
+                  combined = TRUE, bars=TRUE, only.miss = TRUE, cex.axis=0.24, 
+                  gap=3, ylab=c("missing data","Pattern"))
 
+############################################################
 # impute missing values by regression
-complete_df <- data_imputation(df)
+############################################################
+imputed_df_train <- data_imputation(df_train)
+imputed_df_test <- data_imputation(df_test)
+df_train <- NULL
+df_test <- NULL
+
+############################################################
+# feature scaling, standardizing
+# convert all the numeric columns to mean 0, unit variance
+############################################################
+scaled_df_train <- feature_scaling(imputed_df_train)
+scaled_df_test <- feature_scaling(imputed_df_test)
+imputed_df_train <- NULL
+imputed_df_test <- NULL
+
+############################################################
+# feature selection
+# drop features with 0 variance, if any
+############################################################
+
+nearZeroVar(scaled_df_train)
+
+selected_features <- feature_selection(scaled_df_train)
+
+# both the train and test should have the same feature space
+curated_df_train <- subset(scaled_df_train, select = -c(selected_features))
+curated_df_test <- subset(scaled_df_test, select = -c(selected_features))
+
+
 
 sort(diag(var(complete_df)))
 complete_df$features_adaptive_cruise_ctl <- NULL
 
-# feature scaling
-engineered_df <- feature_scaling(complete_df)
 
 correlationMatrix <- cor(engineered_df[,2:13])
 
@@ -140,22 +196,22 @@ plot(importance)
 engineered_df <- subset(engineered_df, category == 'OffRoad')
 trainIndex <- createDataPartition(engineered_df$price__consumer_gross_euro, p = .8, list = FALSE)
 
-engineered_df_TRAIN <- engineered_df[ trainIndex,]
-engineered_df_TEST  <- engineered_df[-trainIndex,]
+scaled_df_train <- engineered_df[ trainIndex,]
+scaled_df_test  <- engineered_df[-trainIndex,]
 
-print(dim(engineered_df_TEST))
-print(dim(engineered_df_TRAIN))
+print(dim(scaled_df_test))
+print(dim(scaled_df_train))
 
 model_final <- train(price__consumer_gross_euro~
-                       mileage   + mod_at_age  + car_age,         data=engineered_df_TRAIN, 
+                       mileage   + mod_at_age  + car_age,         data=scaled_df_train, 
                      method="blassoAveraged", 
                      preProcess="scale")
 
 summary(model_final)
 
 # predict
-predicted <- predict(model_final, newdata = subset(engineered_df_TEST, select = c(mileage, mod_at_age, car_age)))
-actuals <- engineered_df_TEST$price__consumer_gross_euro
+predicted <- predict(model_final, newdata = subset(scaled_df_test, select = c(mileage, mod_at_age, car_age)))
+actuals <- scaled_df_test$price__consumer_gross_euro
 
 # calculate residuals
 residuals<- predicted - actuals
