@@ -82,6 +82,10 @@ cleanse_and_transform <- function(df){
   df$features_central_locking <- central.lock.map[as.character(df$features_central_locking)]
   df$make_id <- makeid.map[as.character(df$make_id)]
   
+  # convert the price to the log scale
+  df$price <- log(df$price__consumer_gross_euro)
+  df$price__consumer_gross_euro <- NULL
+  
   # convert all logical columns to numeric
   cols <- sapply(df, is.logical)
   df[,cols] <- lapply(df[,cols], as.numeric)
@@ -101,10 +105,33 @@ feature_scaling <- function(df){
   return(df)
 }
 
-feature_selection <- function(df){
-  # for each columns, calculate variance,
-  print(dim(df))
+feature_drop <- function(df){
+  # for each column, calculate variance,
+  columns <- nearZeroVar(scaled_df_train)
+  return(columns)
 }
+
+
+feature_selection <- function(df, K){
+  
+  # prepare training scheme
+  control <- trainControl(method="repeatedcv", number=2, repeats=1)
+  # train the model
+  model <- train(price~., data=curated_df_train, method="blassoAveraged", trControl=control)
+  # estimate variable importance
+  importance <- varImp(model, scale=FALSE)
+  # summarize importance
+  print(importance)
+  # plot importance
+  plot(importance)
+  
+  # get it ordered by importance
+  importanceOrder=as.vector(order(-importance$importance))
+  names=rownames(importance$importance)[importanceOrder][1:K]
+  
+  return(c(names, "price"))
+}
+
 
 ############################################################
 # read the training data
@@ -122,20 +149,22 @@ read_train <- NULL
 read_test <- NULL
 
 df_only_numeric <- subset(df_train, select = -c(category))
+df_only_numeric_test <- subset(df_test, select = -c(category))
+
 # fancy visualizations
 aggr(df_only_numeric, col=c('blue','red'), numbers=TRUE, sortVars=TRUE, 
                   labels=names(df_only_numeric), prop = TRUE, digits=2, 
                   combined = TRUE, bars=TRUE, only.miss = TRUE, cex.axis=0.24, 
                   gap=3, ylab=c("missing data","Pattern"))
 
-
-df_only_numeric_test <- subset(df_test, select = -c(category))
-
 # fancy visualizations
 aggr(df_only_numeric_test, col=c('blue','red'), numbers=TRUE, sortVars=TRUE, 
                   labels=names(df_only_numeric_test), prop = TRUE, digits=2, 
                   combined = TRUE, bars=TRUE, only.miss = TRUE, cex.axis=0.24, 
                   gap=3, ylab=c("missing data","Pattern"))
+
+df_only_numeric_test <- NULL
+df_only_numeric <- NULL
 
 ############################################################
 # impute missing values by regression
@@ -155,23 +184,39 @@ imputed_df_train <- NULL
 imputed_df_test <- NULL
 
 ############################################################
-# feature selection
+# Drop 0 variance features
 # drop features with 0 variance, if any
 ############################################################
 
-nearZeroVar(scaled_df_train)
-
-selected_features <- feature_selection(scaled_df_train)
+selected_features <- feature_drop(scaled_df_train)
 
 # both the train and test should have the same feature space
 curated_df_train <- subset(scaled_df_train, select = -c(selected_features))
 curated_df_test <- subset(scaled_df_test, select = -c(selected_features))
+scaled_df_train <- NULL
+scaled_df_test <- NULL
 
+
+############################################################
+# Select features by importance
+############################################################
+
+final_features <- feature_selection(curated_df_train, 6)
+
+final_df_train <- subset(curated_df_train, select = c(final_features))
+final_df_test <- subset(curated_df_test, select = c(final_features))
+curated_df_train <- NULL
+curated_df_test <- NULL
+
+
+############################################################
+# Model training
+# fit a regression model with given features
+############################################################
 
 
 sort(diag(var(complete_df)))
 complete_df$features_adaptive_cruise_ctl <- NULL
-
 
 correlationMatrix <- cor(engineered_df[,2:13])
 
