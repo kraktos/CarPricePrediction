@@ -231,13 +231,6 @@ train_model <- function(final_df_train, final_features){
   
   model_fit <- lm(price ~ ., data=final_df_train)
   
-  par(mfrow = c(3, 2))
-  autoplot(model_fit, which = 1:6, colour = 'category',
-           smooth.colour = 'red', smooth.linetype = 'dashed',
-           ad.colour = 'blue',
-           label.size = 3, label.n = 5, label.colour = 'red',
-           ncol = 2)
-  
   return(model_fit)
 }
 
@@ -433,6 +426,12 @@ final_df_test <- subset(curated_df_test, select = c(final_features))
 ############################################################
 
 model_fit <- train_model(final_df_train, final_features)
+par(mfrow = c(3, 2))
+autoplot(model_fit, which = 1:6, colour = 'category',
+           smooth.colour = 'red', smooth.linetype = 'dashed',
+           ad.colour = 'blue',
+           label.size = 3, label.n = 5, label.colour = 'red',
+           ncol = 2)
 ```
 
 ```{r echo=FALSE}
@@ -509,15 +508,19 @@ final_df_train <- subset(curated_df_train, select = c(final_features))
 final_df_test <- subset(curated_df_test, select = c(final_features))
 
 model_fit_2 <- train_model(final_df_train, final_features)
+par(mfrow = c(3, 2))
+autoplot(model_fit_2, which = 1:6, colour = 'category',
+           smooth.colour = 'red', smooth.linetype = 'dashed',
+           ad.colour = 'blue',
+           label.size = 3, label.n = 5, label.colour = 'red',
+           ncol = 2)
 
 ############################################################
 # Model Evaluation
 # Grab the test dataframe and analyse the errors
 ############################################################
 eval_model(final_df_test, final_features, model_fit_2)
-#eval_model(final_df_test, final_features, model_fit)
 ```
-
 
 
 ```{r echo=FALSE, fig.width=8, fig.height=10}
@@ -531,6 +534,5 @@ p + facet_wrap(~ category, ncol = 1)
 
 p <- ggplot(df_train, aes(age_when_sold, price)) +geom_point(alpha=0.2)
 p + facet_wrap(~ category, ncol = 1) 
-
 ```
 
