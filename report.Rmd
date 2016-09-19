@@ -1,0 +1,536 @@
+---
+title: "Car Price Prediction"
+author: "Arnab Dutta"
+date: "September 18, 2016"
+output: pdf_document
+---
+
+# Problem Statement
+
+Used car valuation is easy for professional dealers, but deciding whether a price is fair or not presents a major problem for most buyers looking to buy a car e.g. at an online marketplace.
+In order improve the experience users have on mobile.de, we aim to display a "mobile.de market price" on any listing page for a used car. To achive this, an automatic valuation of used cars needs to be set up.
+
+## Given
+* Train data
+* Test data
+
+## Tasks
+* predict the prices in the test set
+* include an easily interpretable evaluation of the quality of your model
+
+## Discussion
+* How good is the model? 
+* Would you use it on the website? Why (not)? * Is there anything else you noticed?
+
+
+
+# Approach
+
+Since we are supposed to predict a continuos variable i.e the price of the car, we solve it as a *supervised learning* class of problem, in particular using linear regression based models.
+
+## Data loading and Analysis
+
+As the first step, we must look into the data set. 
+
+```{r echo=FALSE}
+suppressWarnings(suppressMessages(library(lubridate)))
+suppressWarnings(suppressMessages(library(corrgram)))
+suppressWarnings(suppressMessages(library(lattice)))
+suppressWarnings(suppressMessages(library(ggplot2)))
+suppressWarnings(suppressMessages(library(mice)))
+suppressWarnings(suppressMessages(library(VIM)))
+suppressWarnings(suppressMessages(library(ggplot2)))
+suppressWarnings(suppressMessages(library(GGally)))
+suppressWarnings(suppressMessages(library(PerformanceAnalytics)))
+suppressWarnings(suppressMessages(library(mlbench)))
+suppressWarnings(suppressMessages(library(caret)))
+suppressWarnings(suppressMessages(library(MASS)))
+suppressWarnings(suppressMessages(library(ggfortify)))
+suppressWarnings(suppressMessages(library(Hmisc)))
+
+
+
+#for avoiding exponential prints
+options(scipen = 999)
+
+# set working directory
+setwd("/Users/arnabdutta/git/CarPricePrediction")
+
+```
+
+```{r echo=FALSE}
+
+# impute the missing values by regressin on other variables
+data_imputation <- function(df) {
+  # check which columns are missing and how many
+  #print(md.pattern(df))
+  
+  # impute by predictive mean matching
+  df_only_numeric <- subset(df, select = -c(category))
+  df_non_numeric <- subset(df, select = c(category))
+  
+  # impute with predictive mean matching
+  imputed_Data <-
+    mice(
+      df_only_numeric, m = 5, maxit = 5, method = 'pmm', seed = 500
+    )
+  
+  # get the imputed data frame
+  completed_df <- complete(imputed_Data,1)
+  
+  # return with the categorical values concated back
+  return(cbind(df_non_numeric, completed_df))
+}
+
+# feature engineer
+feature_engineer <- function(df, filter) {
+  # convert modification time to year, month
+  df$modification_year <- year(df$modification_time)
+  df$modification_month <- month(df$modification_time)
+  df$modification_time <- NULL
+  
+  # get car registration year, month
+  df$first_registration_year <- df$first_registration %/% 100
+  df$first_registration_month <- df$first_registration %% 100
+  df$first_registration <- NULL
+  
+  # create some additional features
+  current_year <- as.integer(format(Sys.Date(), "%Y"))
+  df$car_age <- current_year - df$first_registration_year
+  df$age_when_sold <- df$modification_year - df$first_registration_year
+  
+  # drop the other years and months
+  df$modification_year <- NULL
+  df$modification_month <- NULL
+  df$first_registration_year <- NULL
+  df$first_registration_month <- NULL
+  
+  # convert to factor representation
+  #df$category <- factor(df$category)
+  
+  # bit of cleansing again,
+  # remove the rows where the age of car is existing but mileage is 0. These are noise
+  if(filter == TRUE){
+    df = subset(df, (price > 3))
+    df = subset(df, (mileage > 0) | (car_age<1))
+    df = subset(df,(car_age<30))
+    df = subset(df,(age_when_sold<=30))
+    df = subset(df, (price > 2) & (mileage < 600000))
+  }
+  
+  
+  
+  return(df)
+}
+
+# cleanses the input data frame
+cleanse_and_transform <- function(df, filter) {
+  
+  # map boolean variables to numeric
+  cond.map <- c("NEW" = 1, "USED" = 0)
+  central.lock.map <- c("false" = 0, "true" = 1)
+  makeid.map <- c("1900" = 0, "25100" = 1)
+  #car.map <- c("EstateCar" = 0,  "Limousine" = 1,  "SportsCar" = 2,
+   #            "Cabrio" =3, "OffRoad" = 4,
+    #           "SmallCar" = 5, "OtherCar" = 6, "Van" = 7)
+  
+  # convert the 2-level factors to numeric
+  df$condition <- cond.map[as.character(df$condition)]
+  df$features_central_locking <-
+    central.lock.map[as.character(df$features_central_locking)]
+  df$make_id <- makeid.map[as.character(df$make_id)]
+  
+  #df$category <- car.map[as.character(df$category)]
+  
+  # convert the price to the log scale
+  df$price <- log(df$price__consumer_gross_euro)
+  df$price__consumer_gross_euro <- NULL
+  
+  # convert all logical columns to numeric
+  cols <- sapply(df, is.logical)
+  df[,cols] <- lapply(df[,cols], as.numeric)
+  
+  # drop redundant ones and create other ones
+  df <- feature_engineer(df, filter)
+  
+  return(df)
+}
+
+
+feature_scaling <- function(df) {
+  df$mileage  <- scale(df$mileage, center = TRUE, scale = TRUE)
+  df$age_when_sold  <-
+    scale(df$age_when_sold, center = TRUE, scale = TRUE)
+  df$car_age  <- scale(df$car_age, center = TRUE, scale = TRUE)
+  
+  return(df)
+}
+
+feature_drop <- function(df) {
+  # for each column, calculate variance,
+  columns <- nearZeroVar(scaled_df_train)
+  return(columns)
+}
+
+
+feature_selection <- function(df) {
+  # prepare training scheme
+  control <- trainControl(method = "repeatedcv", number = 2, repeats = 1)
+  # train the model
+  model <-
+    train(price ~ ., data = df, method = "blassoAveraged", trControl =
+            control)
+  # estimate variable importance
+  importance <- varImp(model, scale = FALSE)
+  # summarize importance
+  #print(importance)
+  # plot importance
+  #jpeg(file="var_importance.jpg")
+  #plot(importance)
+  #dev.off()
+  return(importance)
+}
+
+
+analyse_residuals <- function(predicted, actuals, model_summ){
+  
+  # calculate residuals
+  residuals <- predicted - actuals
+  # standardize residuals
+  st_residuals <- residuals
+  #(residuals - mean(residuals)) / sqrt(var(residuals))
+  
+  # plot predicted vs actuals
+  #pr_act <- qplot(predicted, actuals) + geom_abline(aes(
+   # slope = 1,intercept = 0,color = "red"
+  #), size = 1.3)
+  
+  #ggsave(filename="pr_act.jpg", plot=pr_act)
+  
+  # plot residuals vs actuals
+  #res_pre <- qplot(predicted, st_residuals) + geom_abline(aes(
+  #  slope = 0,intercept = 0,color = "red"
+  #), size = 1.3)
+  
+  # ggsave(filename="res_pre.jpg", plot=res_pre)
+  
+  RMSE <- RMSE(as.numeric(predicted), as.numeric(actuals))
+  print(paste("RMSE = ", RMSE))
+  
+  MAE <- mean(abs(as.numeric(predicted) - as.numeric(actuals)))
+  print(paste("MAE = ", MAE))
+  
+  print(paste("R2 = ", model_summ$r.squared))
+  print(paste("Adjusted R2 = ", model_summ$adj.r.squared))
+}
+
+
+train_model <- function(final_df_train, final_features){
+  
+  final_df_train[final_features] <- lapply(final_df_train[final_features], as.vector) 
+  
+  model_fit <- lm(price ~ ., data=final_df_train)
+  
+  par(mfrow = c(3, 2))
+  autoplot(model_fit, which = 1:6, colour = 'category',
+           smooth.colour = 'red', smooth.linetype = 'dashed',
+           ad.colour = 'blue',
+           label.size = 3, label.n = 5, label.colour = 'red',
+           ncol = 2)
+  
+  return(model_fit)
+}
+
+
+eval_model <- function(final_df_test, final_features, model_fit){
+  
+  final_df_test[final_features] <- lapply(final_df_test[final_features], as.vector) 
+   
+  # get the predicted  prices 
+  predicted <-  predict(model_fit, newdata = final_df_test)
+  
+  # get the actual prices
+  actuals <- final_df_test$price
+  
+  # get the predicted  prices 
+  predicted <-  predict(model_fit, newdata = final_df_test)
+  
+  # get the actual prices
+  actuals <- final_df_test$price
+  
+  analyse_residuals(predicted, actuals, summary(model_fit))
+}
+
+```
+
+
+```{r}
+
+############################################################
+# read the training and test data
+############################################################
+read_train <- read.csv("data/train.dsv", sep = "|", quote = "\"")
+read_test <- read.csv("data/test.dsv", sep = "|", quote = "\"")
+
+```
+
+Once loaded in memory, we check the data frames for the column names and their respective data types
+
+```{r}
+str(read_train)
+```
+
+There is a task of converting the data types. Quickly we take a look at the column statistics. We are looking into the training set only for now.
+
+```{r}
+describe(read_train) 
+```
+
+## First Observations
+
+From the simple description of the training data, we note down few interesting aspects
+
+* Data types are mixed
+* There are some columns with missing values, eg *first_registration*, *mileage*, *model_id*
+* The target variable to predict is *price__consumer_gross_euro*
+* Some columns have just 1 unique value, for example *features_adaptive_cruise_ctl*. Also the features like *features_central_locking*, *condition* have an extreme unbalanced distribution
+* *first_registration* has a strange date format
+* There seems to be a lot of outlier data points, for instance a price of "1" or a mileage of "0"
+
+## Data transformation
+
+In this step, we clean up the data types into a coherent format. 
+```{r}
+# the function definition can be found in the actual source code
+df_train <- cleanse_and_transform(read_train, FALSE)
+df_test <- cleanse_and_transform(read_test, FALSE)
+```
+
+The cleanse function does the following 
+* converts the *category* to numeric
+* converts logical and 2-level factors to numeric variables with 0 and 1
+* parses the *modification_time* to define the variable *age_when_sold* in numeric years
+* similarly with the *first_registration* to get the variable *car_age*
+* price is transformed to log scale. This was not extremely important.
+
+Now lets take a look at the columns once again
+```{r}
+str(df_train)
+```
+
+This converts all into numerical format. Lets briefly find the NA containing columns
+
+```{r}
+# find na containing columns
+  na_cols_train <- colnames(df_train)[apply(is.na(df_train), 2, any)]
+  print(na_cols_train)
+  na_cols_test <- colnames(df_test)[apply(is.na(df_test), 2, any)]
+  print(na_cols_test)
+  
+```
+
+## Data Imputation
+
+In order to see the missing values and the degree to which they are missing is important. There is no rule of thumb but if some column has more than 25% of missing data, it is advisable to drop the column altogether.
+
+```{r}
+
+md.pattern(df_train)
+
+# And visualizations
+  
+aggr(
+  df_train, col = c('blue','red'), numbers = TRUE, sortVars = TRUE,
+  labels = names(df_train), prop = TRUE, digits = 2,
+  combined = TRUE, bars = TRUE, only.miss = TRUE, cex.axis = 0.4,
+  gap = 1, ylab = c("missing data","Pattern"))
+
+```
+
+In this step, we impute the missing values in a particular column by predicting the missing value of the column based on the other present column values.
+
+```{r results="hide"}
+
+############################################################
+# impute missing values by regression
+############################################################
+# Impute the missing values
+imputed_df_train <- data_imputation(df_train)
+imputed_df_test <- data_imputation(df_test)
+
+# remove the old frames
+#df_train <- NULL
+#df_test <- NULL
+```
+
+## Feature Scaling
+
+```{r}
+
+############################################################
+# feature scaling, standardizing
+# convert all the numeric columns to mean 0, unit variance
+############################################################
+scaled_df_train <- feature_scaling(imputed_df_train)
+scaled_df_test <- feature_scaling(imputed_df_test)
+
+# clear up frames from memory 
+#imputed_df_train <- NULL
+#imputed_df_test <- NULL
+
+```
+
+## Feature Engineering 
+```{r}
+
+############################################################
+# Drop 0 variance features
+# drop features with 0 variance, if any
+############################################################
+
+selected_features <- feature_drop(scaled_df_train)
+
+# both the train and test should have the same feature space
+curated_df_train <-
+  subset(scaled_df_train, select = -c(selected_features))
+curated_df_test <-
+  subset(scaled_df_test, select = -c(selected_features))
+
+#scaled_df_train <- NULL
+#scaled_df_test <- NULL
+```
+
+
+```{r results="hide" }
+
+############################################################
+# Select features by importance
+############################################################
+
+importance <-feature_selection(curated_df_train)
+```
+
+```{r echo=FALSE}
+plot(importance)
+
+# get it ordered by importance
+importanceOrder = as.vector(order(-importance$importance))
+names = rownames(importance$importance)[importanceOrder][1:8]
+final_features <- c(names, "price")
+
+final_df_train <- subset(curated_df_train, select = c(final_features))
+final_df_test <- subset(curated_df_test, select = c(final_features))
+
+#curated_df_train <- NULL
+#curated_df_test <- NULL
+```
+
+
+```{r fig.width=10, fig.height=12, echo=FALSE}
+############################################################
+# Model training
+# fit a regression model with selected features
+############################################################
+
+model_fit <- train_model(final_df_train, final_features)
+```
+
+```{r echo=FALSE}
+
+############################################################
+# Model Evaluation
+# Grab the test dataframe and analyse the errors
+############################################################
+eval_model(final_df_test, final_features, model_fit)
+
+```
+
+We resort to finer data analysis now in order to check if there exists some anomalies in the data set.
+
+```{r echo=FALSE, fig.width=8, fig.height=10}
+
+p<- ggplot(df_train, aes(mileage, price))+geom_point(alpha=0.2)
+p + facet_wrap(~ category, ncol = 1) 
+
+
+p <- ggplot(df_train, aes(car_age, price)) +geom_point(alpha=0.2)
+p + facet_wrap(~ category, ncol = 1) 
+
+p <- ggplot(df_train, aes(age_when_sold, price)) +geom_point(alpha=0.2)
+p + facet_wrap(~ category, ncol = 1) 
+
+```
+
+
+Hence, we decide to prun some datapoints aggressively from our training examples.
+And re run the pipeline with the pruned data sets.
+
+```{r echo=FALSE}
+# the function definition can be found in the actual source code
+df_train <- cleanse_and_transform(read_train, TRUE)
+df_test <- cleanse_and_transform(read_test, FALSE)
+
+############################################################
+# impute missing values by regression
+############################################################
+# Impute the missing values
+imputed_df_train <- data_imputation(df_train)
+imputed_df_test <- data_imputation(df_test)
+
+############################################################
+# feature scaling, standardizing
+# convert all the numeric columns to mean 0, unit variance
+############################################################
+scaled_df_train <- feature_scaling(imputed_df_train)
+scaled_df_test <- feature_scaling(imputed_df_test)
+
+############################################################
+# Drop 0 variance features
+# drop features with 0 variance, if any
+############################################################
+
+selected_features <- feature_drop(scaled_df_train)
+
+# both the train and test should have the same feature space
+curated_df_train <- subset(scaled_df_train, select = -c(selected_features))
+curated_df_test <-  subset(scaled_df_test, select = -c(selected_features))
+
+############################################################
+# Select features by importance
+############################################################
+importance <-feature_selection(curated_df_train)
+
+# get it ordered by importance
+importanceOrder = as.vector(order(-importance$importance))
+names = rownames(importance$importance)[importanceOrder][1:8]
+final_features <- c(names, "price")
+
+final_df_train <- subset(curated_df_train, select = c(final_features))
+final_df_test <- subset(curated_df_test, select = c(final_features))
+
+model_fit_2 <- train_model(final_df_train, final_features)
+
+############################################################
+# Model Evaluation
+# Grab the test dataframe and analyse the errors
+############################################################
+eval_model(final_df_test, final_features, model_fit_2)
+#eval_model(final_df_test, final_features, model_fit)
+```
+
+
+
+```{r echo=FALSE, fig.width=8, fig.height=10}
+
+p<- ggplot(df_train, aes(mileage, price))+geom_point(alpha=0.2)
+p + facet_wrap(~ category, ncol = 1) 
+
+
+p <- ggplot(df_train, aes(car_age, price)) +geom_point(alpha=0.2)
+p + facet_wrap(~ category, ncol = 1) 
+
+p <- ggplot(df_train, aes(age_when_sold, price)) +geom_point(alpha=0.2)
+p + facet_wrap(~ category, ncol = 1) 
+
+```
+
